@@ -1,0 +1,5 @@
+🔧 Project Goal: Ask IPL-related questions in
+plain English → convert to SQL → run on MySQL → get an answer back.
+
+
+
