@@ -1,47 +1,45 @@
+# langchain_helper.py
+
 import os
 from dotenv import load_dotenv
-from langchain.llms import OpenAI
+from langchain_community.llms import Ollama
 from langchain.utilities import SQLDatabase
 from langchain_experimental.sql import SQLDatabaseChain
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.prompts import SemanticSimilarityExampleSelector, PromptTemplate, FewShotPromptTemplate
-from few_shots import few_shots
+from langchain.prompts import PromptTemplate
 
 load_dotenv()
 
 def get_ipl_db_chain():
-    db = SQLDatabase.from_uri(
-        "mysql+pymysql://root:your_password@localhost/ipl_chatbot",
-        sample_rows_in_table_info=3
-    )
+    # 1) Connect to the IPL MySQL database
+    db = SQLDatabase.from_uri("mysql+pymysql://root:Harsh_jain%4009876@localhost/ipl_chatbot")
 
-    llm = OpenAI(temperature=0, model_name="gpt-3.5-turbo-instruct")
+    # 2) Instantiate the Ollama LLM (Llama 2, temperature=0 for deterministic SQL)
+    llm = Ollama(model="llama2", temperature=0)
 
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    texts = ["\n".join([v for v in shot.values()]) for shot in few_shots]
-    vectorstore = Chroma.from_texts(texts, embeddings, metadatas=few_shots)
-
-    selector = SemanticSimilarityExampleSelector(vectorstore=vectorstore, k=2)
-
+    # 3) Build a PromptTemplate forcing ONLY a valid SELECT statement (no extra text)
     prefix = """You are a SQL expert for an IPL database.
-Convert the question to SQL, run it, and return the final answer.
-Use only SELECT queries. Use exact column/table names:
+Convert the user question into a valid MySQL SELECT query only.
+Do NOT include any explanation, markdown, or extra text—output exactly one SELECT statement.
+Use these exact tables and columns:
+
 - matches(id, season, city, date, team1, team2, toss_winner, toss_decision, winner, result, result_margin, player_of_match, venue)
 - deliveries(match_id, inning, batting_team, bowling_team, over, ball, batsman, bowler, batsman_runs, extra_runs, total_runs, player_dismissed, dismissal_kind, fielder)
 """
 
-    example_prompt = PromptTemplate(
-        input_variables=["Question", "SQLQuery", "SQLResult", "Answer"],
-        template="\nQuestion: {Question}\nSQLQuery: {SQLQuery}\nSQLResult: {SQLResult}\nAnswer: {Answer}"
+    suffix = "\nQuestion: {input}\nSQLQuery (only the SQL statement, no explanation or commentary):"
+
+    prompt_template = PromptTemplate(
+        input_variables=["input"],
+        template=prefix + suffix
     )
 
-    few_shot_prompt = FewShotPromptTemplate(
-        example_selector=selector,
-        example_prompt=example_prompt,
-        prefix=prefix,
-        suffix="\nQuestion: {input}\nSQLQuery:",
-        input_variables=["input", "table_info", "top_k"]
+    # 4) Create the SQLDatabaseChain. NOTE: pass (llm, db) positionally.
+    chain = SQLDatabaseChain.from_llm(
+        llm,                # first positional: the LLM
+        db,                 # second positional: the SQLDatabase instance
+        prompt=prompt_template,
+        verbose=True,
+        return_intermediate_steps=True
     )
 
-    return SQLDatabaseChain.from_llm(llm, db, prompt=few_shot_prompt, verbose=True)
+    return chain
